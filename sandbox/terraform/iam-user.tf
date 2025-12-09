@@ -1,5 +1,6 @@
 # Automatic IAM User Creation for Each Account
-# This creates a console user with admin access for easy student login
+# Creates IAM user with admin access
+# Password must be set manually after creation (Terraform limitation)
 
 terraform {
   required_providers {
@@ -13,34 +14,14 @@ terraform {
 # Get current account details
 data "aws_caller_identity" "current" {}
 
-# Get account name from SSM (set by AFT)
-data "aws_ssm_parameter" "account_name" {
-  name = "/aft/account/account-name"
-}
-
 # Create IAM user for console access
 resource "aws_iam_user" "console_user" {
   name = "student"
 
   tags = {
-    Name        = "Student Console User"
-    ManagedBy   = "AFT"
-    Purpose     = "Console Access"
-    AccountName = data.aws_ssm_parameter.account_name.value
-  }
-}
-
-# Create console password for the user
-resource "aws_iam_user_login_profile" "console_user_login" {
-  user                    = aws_iam_user.console_user.name
-  password_reset_required = true # Force password change on first login
-
-  # Default password - students will be forced to change this on first login
-  # You can change this to any password you want to use as default
-  lifecycle {
-    ignore_changes = [
-      password_reset_required,
-    ]
+    Name      = "Student Console User"
+    ManagedBy = "AFT"
+    Purpose   = "Console Access"
   }
 }
 
@@ -55,67 +36,67 @@ resource "aws_iam_access_key" "console_user_key" {
   user = aws_iam_user.console_user.name
 }
 
-# Store password in SSM Parameter Store (encrypted)
-resource "aws_ssm_parameter" "user_password" {
-  name        = "/aft/iam-user/initial-password"
-  description = "Initial password for student IAM user"
-  type        = "SecureString"
-  value       = "Welcome@2025"
-
-  tags = {
-    ManagedBy = "AFT"
-    Purpose   = "IAM User Password"
-  }
-}
-
-# Output login details
-output "iam_user_details" {
-  description = "IAM user login information"
-  value = {
-    username          = aws_iam_user.console_user.name
-    account_id        = data.aws_caller_identity.current.account_id
-    console_login_url = "https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console"
-    initial_password  = "Welcome@2025"
-    password_note     = "User must change password on first login"
-  }
-  sensitive = false
+# Output setup instructions
+output "student_setup_required" {
+  description = "Password setup instructions"
+  value = <<-EOT
+    ═══════════════════════════════════════════════════════════════
+    ✅ IAM USER CREATED - PASSWORD SETUP REQUIRED
+    ═══════════════════════════════════════════════════════════════
+    
+    Account ID: ${data.aws_caller_identity.current.account_id}
+    IAM User: ${aws_iam_user.console_user.name}
+    Status: User created, password NOT set
+    
+    ═══════════════════════════════════════════════════════════════
+    SET PASSWORD - Option 1: AWS Console (Easiest)
+    ═══════════════════════════════════════════════════════════════
+    
+    1. Switch role to this account
+    2. Go to: IAM → Users → student
+    3. Security credentials tab → Console access → Enable
+    4. Set password: Welcome@2025
+    5. Check: "User must create new password at next sign-in"
+    6. Apply
+    
+    ═══════════════════════════════════════════════════════════════
+    SET PASSWORD - Option 2: AWS CLI
+    ═══════════════════════════════════════════════════════════════
+    
+    aws iam create-login-profile \
+      --user-name student \
+      --password "Welcome@2025" \
+      --password-reset-required
+    
+    ═══════════════════════════════════════════════════════════════
+    STUDENT LOGIN (After Password Set):
+    ═══════════════════════════════════════════════════════════════
+    
+    URL: https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console
+    Username: student
+    Password: Welcome@2025 (change on first login)
+    
+    ═══════════════════════════════════════════════════════════════
+  EOT
 }
 
 output "iam_user_access_key" {
-  description = "Access key for programmatic access (optional)"
+  description = "Access key for programmatic access"
   value = {
+    account_id        = data.aws_caller_identity.current.account_id
+    username          = aws_iam_user.console_user.name
     access_key_id     = aws_iam_access_key.console_user_key.id
     secret_access_key = aws_iam_access_key.console_user_key.secret
   }
   sensitive = true
 }
 
-output "student_credentials" {
-  description = "Complete student login instructions"
-  value = <<-EOT
-    ═══════════════════════════════════════════════════════════════
-    STUDENT LOGIN CREDENTIALS
-    ═══════════════════════════════════════════════════════════════
-    
-    Account ID: ${data.aws_caller_identity.current.account_id}
-    Account Name: ${data.aws_ssm_parameter.account_name.value}
-    
-    Login URL: https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console
-    
-    Username: ${aws_iam_user.console_user.name}
-    Initial Password: Welcome@2025
-    
-    ⚠️  IMPORTANT: You will be required to change your password on first login
-    
-    ═══════════════════════════════════════════════════════════════
-    PROGRAMMATIC ACCESS (Optional - for AWS CLI/SDK)
-    ═══════════════════════════════════════════════════════════════
-    
-    AWS Access Key ID: ${aws_iam_access_key.console_user_key.id}
-    AWS Secret Access Key: ${aws_iam_access_key.console_user_key.secret}
-    
-    ═══════════════════════════════════════════════════════════════
-  EOT
-  sensitive = false
+output "quick_login_info" {
+  description = "Quick reference for login"
+  value = {
+    account_id    = data.aws_caller_identity.current.account_id
+    username      = aws_iam_user.console_user.name
+    login_url     = "https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console"
+    password_note = "Password must be set manually - see student_setup_required output"
+  }
 }
-
