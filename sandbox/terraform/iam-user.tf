@@ -1,5 +1,5 @@
 # Automatic IAM User Creation for Student Accounts
-# Creates user with fixed default password that MUST be rotated on first login
+# Creates user with hardcoded default password that MUST be changed on first login
 
 terraform {
   required_providers {
@@ -13,6 +13,12 @@ terraform {
 # Get current account details
 data "aws_caller_identity" "current" {}
 
+# Hardcoded default password for all student accounts
+# Students MUST change this on first login
+locals {
+  default_password = "Welcome@Student2025"
+}
+
 # Create IAM user for console access
 resource "aws_iam_user" "student" {
   name = "student"
@@ -24,14 +30,36 @@ resource "aws_iam_user" "student" {
   }
 }
 
-# Set console password with fixed default that must be changed
+# Set console password - MUST be changed on first login
 resource "aws_iam_user_login_profile" "student_login" {
-  user    = aws_iam_user.student.name
+  user = aws_iam_user.student.name
   
-  # IMPORTANT: pgp_key is intentionally not used here for simplicity
-  # Password will be visible in Terraform state and outputs
-  # This is acceptable for student training accounts
+  # Using PGP key to encrypt password (or use plain password for simplicity)
+  # For student accounts, we'll use plain password
   password_reset_required = true
+}
+
+# Use null_resource to set hardcoded password via AWS CLI
+# This is needed because Terraform can't set a specific password directly
+resource "null_resource" "set_password" {
+  depends_on = [aws_iam_user.student]
+  
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Delete any existing login profile first
+      aws iam delete-login-profile --user-name student 2>/dev/null || true
+      
+      # Create login profile with hardcoded password
+      aws iam create-login-profile \
+        --user-name student \
+        --password "${local.default_password}" \
+        --password-reset-required || echo "Login profile already exists"
+    EOT
+  }
+  
+  triggers = {
+    always_run = timestamp()
+  }
 }
 
 # Attach AdministratorAccess policy
@@ -46,8 +74,8 @@ resource "aws_iam_access_key" "student_key" {
 }
 
 # Output student login information
-output "student_login_credentials" {
-  description = "Student login information - share with student"
+output "student_login_info" {
+  description = "Student login credentials - share this with students"
   value = <<-EOT
     ═══════════════════════════════════════════════════════════════
     STUDENT LOGIN CREDENTIALS
@@ -55,29 +83,33 @@ output "student_login_credentials" {
     
     Account ID: ${data.aws_caller_identity.current.account_id}
     
-    Console Login:
-      URL: https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console
-      Username: student
-      Password: ${aws_iam_user_login_profile.student_login.password}
+    LOGIN INFORMATION:
+    URL: https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console
+    Username: student
+    Password: ${local.default_password}
     
-    ⚠️  IMPORTANT: You MUST change your password on first login
+    ⚠️  IMPORTANT: Password MUST be changed on first login
     
-    CLI/SDK Access:
-      AWS_ACCESS_KEY_ID: ${aws_iam_access_key.student_key.id}
-      AWS_SECRET_ACCESS_KEY: ${aws_iam_access_key.student_key.secret}
+    ═══════════════════════════════════════════════════════════════
+    CLI/SDK ACCESS (Optional):
+    ═══════════════════════════════════════════════════════════════
+    
+    AWS_ACCESS_KEY_ID: ${aws_iam_access_key.student_key.id}
+    AWS_SECRET_ACCESS_KEY: ${aws_iam_access_key.student_key.secret}
     
     ═══════════════════════════════════════════════════════════════
   EOT
-  sensitive = true
+  sensitive = false
 }
 
-output "student_password" {
-  description = "Terraform-generated password (must be changed on first login)"
-  value       = aws_iam_user_login_profile.student_login.password
-  sensitive   = true
-}
-
-output "student_login_url" {
-  description = "Direct login URL for student"
-  value       = "https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console"
+output "student_credentials_summary" {
+  description = "Quick reference"
+  value = {
+    account_id    = data.aws_caller_identity.current.account_id
+    login_url     = "https://${data.aws_caller_identity.current.account_id}.signin.aws.amazon.com/console"
+    username      = "student"
+    password      = local.default_password
+    password_note = "MUST be changed on first login"
+  }
+  sensitive = false
 }
